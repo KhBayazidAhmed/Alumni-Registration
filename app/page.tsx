@@ -1,4 +1,4 @@
-import RegistrationForm from "@/components/registration-form"
+import ClientPage from "./client-page"
 
 export default function Home() {
   return (
@@ -14,7 +14,8 @@ export default function Home() {
           </p>
         </div>
       </div>
-      <RegistrationForm />
+
+      <ClientPage />
     </main>
   )
 }

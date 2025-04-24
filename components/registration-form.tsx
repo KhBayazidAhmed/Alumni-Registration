@@ -5,7 +5,8 @@ import { useState, useRef, useEffect, useCallback, memo } from "react"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useForm } from "react-hook-form"
 import * as z from "zod"
-import { Check, ChevronLeft, Plus, Trash2, Upload, X } from "lucide-react"
+import { Plus, Trash2, Upload, X } from "lucide-react"
+import dynamic from "next/dynamic"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -15,16 +16,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { useToast } from "@/hooks/use-toast"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
-import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
+import { useFormStorage } from "@/hooks/use-form-storage"
+import { useArrayStorage } from "@/hooks/use-array-storage"
+import { compressImage, safelyStoreItem, safelyRemoveItem } from "@/utils/storage-utils"
 
 // Define a leaner schema with only the required fields
 const formSchema = z.object({
@@ -65,6 +60,18 @@ const STORAGE_KEY = "registration_form_data"
 const GUESTS_KEY = "registration_form_guests"
 const KIDS_KEY = "registration_form_kids"
 const PROFILE_IMAGE_KEY = "registration_form_profile_image"
+
+// Add this code right before the RegistrationForm component definition
+const LazyConfirmationDialog = dynamic(() => import("@/components/confirmation-dialog"), {
+  loading: () => (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center">
+      <div className="bg-background p-6 rounded-lg shadow-lg">
+        <p>Loading preview...</p>
+      </div>
+    </div>
+  ),
+  ssr: false,
+})
 
 // Memoized guest item component
 const GuestItem = memo(function GuestItem({
@@ -382,85 +389,6 @@ const PersonalInfoSection = memo(function PersonalInfoSection({
 })
 
 export default function RegistrationForm() {
-  const [guests, setGuests] = useState<GuestType[]>([])
-  const [kids, setKids] = useState<KidType[]>([])
-  const [profileImage, setProfileImage] = useState<string | null>(null)
-  const [showConfirmation, setShowConfirmation] = useState(false)
-  const [submissionDate, setSubmissionDate] = useState<string>("")
-  const fileInputRef = useRef<HTMLInputElement>(null)
-  const { toast } = useToast()
-
-  // Load saved form data on initial render
-  useEffect(() => {
-    // Set current date for submission
-    setSubmissionDate(
-      new Date().toLocaleDateString("en-US", {
-        weekday: "long",
-        year: "numeric",
-        month: "long",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-      }),
-    )
-
-    // Load form data
-    const savedFormData = localStorage.getItem(STORAGE_KEY)
-    if (savedFormData) {
-      try {
-        const parsedData = JSON.parse(savedFormData)
-        form.reset(parsedData)
-      } catch (error) {
-        console.error("Error parsing saved form data:", error)
-      }
-    }
-
-    // Load guests
-    const savedGuests = localStorage.getItem(GUESTS_KEY)
-    if (savedGuests) {
-      try {
-        setGuests(JSON.parse(savedGuests))
-      } catch (error) {
-        console.error("Error parsing saved guests:", error)
-      }
-    }
-
-    // Load kids
-    const savedKids = localStorage.getItem(KIDS_KEY)
-    if (savedKids) {
-      try {
-        setKids(JSON.parse(savedKids))
-      } catch (error) {
-        console.error("Error parsing saved kids:", error)
-      }
-    }
-
-    // Load profile image
-    const savedProfileImage = localStorage.getItem(PROFILE_IMAGE_KEY)
-    if (savedProfileImage) {
-      setProfileImage(savedProfileImage)
-    }
-  }, [])
-
-  // Save guests to localStorage whenever they change
-  useEffect(() => {
-    localStorage.setItem(GUESTS_KEY, JSON.stringify(guests))
-  }, [guests])
-
-  // Save kids to localStorage whenever they change
-  useEffect(() => {
-    localStorage.setItem(KIDS_KEY, JSON.stringify(kids))
-  }, [kids])
-
-  // Save profile image to localStorage whenever it changes
-  useEffect(() => {
-    if (profileImage) {
-      localStorage.setItem(PROFILE_IMAGE_KEY, profileImage)
-    } else {
-      localStorage.removeItem(PROFILE_IMAGE_KEY)
-    }
-  }, [profileImage])
-
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
@@ -483,13 +411,63 @@ export default function RegistrationForm() {
     },
   })
 
-  // Save form data to localStorage whenever it changes
+  // Replace the useState and useEffect for guests and kids with these hooks
+  const {
+    items: guests,
+    setItems: setGuests,
+    addItem: addGuestItem,
+    removeItem: removeGuestItem,
+    updateItem: updateGuestItem,
+    clearItems: clearGuests,
+    isLoaded: guestsLoaded,
+  } = useArrayStorage<GuestType>(GUESTS_KEY, [])
+
+  const {
+    items: kids,
+    setItems: setKids,
+    addItem: addKidItem,
+    removeItem: removeKidItem,
+    updateItem: updateKidItem,
+    clearItems: clearKids,
+    isLoaded: kidsLoaded,
+  } = useArrayStorage<KidType>(KIDS_KEY, [])
+
+  const [profileImage, setProfileImage] = useState<string | null>(null)
+  const [showConfirmation, setShowConfirmation] = useState(false)
+  const [submissionDate, setSubmissionDate] = useState<string>("")
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const { toast } = useToast()
+  const profileImageLoaded = useRef(false)
+
+  // Add this after the form initialization
+  const { isLoaded: formLoaded, clearStorage: clearFormStorage } = useFormStorage(form, STORAGE_KEY)
+
+  // Update the isLoading state to use the custom hooks
+  const isLoading = !formLoaded || !guestsLoaded || !kidsLoaded
+
+  // Load saved form data on initial render
   useEffect(() => {
-    const subscription = form.watch((value) => {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(value))
-    })
-    return () => subscription.unsubscribe()
-  }, [form.watch])
+    // Set current date for submission
+    setSubmissionDate(
+      new Date().toLocaleDateString("en-US", {
+        weekday: "long",
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      }),
+    )
+
+    // Load profile image only once on initial render
+    if (!profileImageLoaded.current) {
+      const savedProfileImage = localStorage.getItem(PROFILE_IMAGE_KEY)
+      if (savedProfileImage) {
+        setProfileImage(savedProfileImage)
+      }
+      profileImageLoaded.current = true
+    }
+  }, [])
 
   const handleSubmit = useCallback(
     (e: React.FormEvent) => {
@@ -534,34 +512,54 @@ export default function RegistrationForm() {
   )
 
   const handleImageChange = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0]
-      if (file) {
-        // Check file type
-        if (!file.type.startsWith("image/")) {
-          toast({
-            title: "Invalid file type",
-            description: "Please select an image file.",
-            variant: "destructive",
-          })
-          return
-        }
+      if (!file) return
 
-        // Check file size (limit to 5MB)
-        if (file.size > 5 * 1024 * 1024) {
-          toast({
-            title: "File too large",
-            description: "Image size should be less than 5MB.",
-            variant: "destructive",
-          })
-          return
-        }
+      // Check file type
+      if (!file.type.startsWith("image/")) {
+        toast({
+          title: "Invalid file type",
+          description: "Please select an image file.",
+          variant: "destructive",
+        })
+        return
+      }
 
+      // Check file size (limit to 5MB)
+      if (file.size > 5 * 1024 * 1024) {
+        toast({
+          title: "File too large",
+          description: "Image size should be less than 5MB.",
+          variant: "destructive",
+        })
+        return
+      }
+
+      try {
+        // Read the file
         const reader = new FileReader()
-        reader.onload = () => {
-          setProfileImage(reader.result as string)
-        }
-        reader.readAsDataURL(file)
+        const imageDataPromise = new Promise<string>((resolve, reject) => {
+          reader.onload = () => resolve(reader.result as string)
+          reader.onerror = reject
+          reader.readAsDataURL(file)
+        })
+
+        const imageData = await imageDataPromise
+
+        // Compress the image
+        const compressedImage = await compressImage(imageData, 800, 0.7)
+
+        // Set state and save to localStorage
+        setProfileImage(compressedImage)
+        safelyStoreItem(PROFILE_IMAGE_KEY, compressedImage)
+      } catch (error) {
+        console.error("Error processing image:", error)
+        toast({
+          title: "Error processing image",
+          description: "Please try again with a different image.",
+          variant: "destructive",
+        })
       }
     },
     [toast],
@@ -569,6 +567,7 @@ export default function RegistrationForm() {
 
   const removeImage = useCallback(() => {
     setProfileImage(null)
+    safelyRemoveItem(PROFILE_IMAGE_KEY)
     if (fileInputRef.current) {
       fileInputRef.current.value = ""
     }
@@ -578,32 +577,9 @@ export default function RegistrationForm() {
     fileInputRef.current?.click()
   }, [])
 
-  const addGuest = useCallback(() => {
-    setGuests((prev) => [...prev, { id: Date.now().toString(), name: "", age: "", relation: "" }])
-  }, [])
-
-  const removeGuest = useCallback((id: string) => {
-    setGuests((prev) => prev.filter((guest) => guest.id !== id))
-  }, [])
-
-  const updateGuest = useCallback((id: string, field: keyof GuestType, value: string) => {
-    setGuests((prev) => prev.map((guest) => (guest.id === id ? { ...guest, [field]: value } : guest)))
-  }, [])
-
-  const addKid = useCallback(() => {
-    setKids((prev) => [...prev, { id: Date.now().toString(), name: "", age: "" }])
-  }, [])
-
-  const removeKid = useCallback((id: string) => {
-    setKids((prev) => prev.filter((kid) => kid.id !== id))
-  }, [])
-
-  const updateKid = useCallback((id: string, field: keyof KidType, value: string) => {
-    setKids((prev) => prev.map((kid) => (kid.id === id ? { ...kid, [field]: value } : kid)))
-  }, [])
-
   const clearForm = useCallback(() => {
     if (confirm("Are you sure you want to clear all form data? This cannot be undone.")) {
+      // Reset form
       form.reset({
         nameEnglish: "",
         gender: "",
@@ -622,20 +598,61 @@ export default function RegistrationForm() {
         jobPosition: "",
         remarks: "",
       })
-      setGuests([])
-      setKids([])
+
+      // Clear all data
+      clearGuests()
+      clearKids()
+      clearFormStorage()
+      safelyRemoveItem(PROFILE_IMAGE_KEY)
+
+      // Reset image state
       setProfileImage(null)
-      localStorage.removeItem(STORAGE_KEY)
-      localStorage.removeItem(GUESTS_KEY)
-      localStorage.removeItem(KIDS_KEY)
-      localStorage.removeItem(PROFILE_IMAGE_KEY)
+      if (fileInputRef.current) {
+        fileInputRef.current.value = ""
+      }
 
       toast({
         title: "Form cleared",
         description: "All form data has been cleared.",
       })
     }
-  }, [form, toast])
+  }, [form, toast, clearGuests, clearKids, clearFormStorage])
+
+  const addGuest = useCallback(() => {
+    addGuestItem({ id: Date.now().toString(), name: "", age: "", relation: "" })
+  }, [addGuestItem])
+
+  const removeGuest = useCallback(
+    (id: string) => {
+      removeGuestItem(id)
+    },
+    [removeGuestItem],
+  )
+
+  const updateGuest = useCallback(
+    (id: string, field: keyof GuestType, value: string) => {
+      updateGuestItem(id, field, value)
+    },
+    [updateGuestItem],
+  )
+
+  const addKid = useCallback(() => {
+    addKidItem({ id: Date.now().toString(), name: "", age: "" })
+  }, [addKidItem])
+
+  const removeKid = useCallback(
+    (id: string) => {
+      removeKidItem(id)
+    },
+    [removeKidItem],
+  )
+
+  const updateKid = useCallback(
+    (id: string, field: keyof KidType, value: string) => {
+      updateKidItem(id, field, value)
+    },
+    [updateKidItem],
+  )
 
   // Get form values for confirmation
   const formValues = form.getValues()
@@ -645,6 +662,22 @@ export default function RegistrationForm() {
     (guest) => guest.name.trim() !== "" && guest.age.trim() !== "" && guest.relation.trim() !== "",
   )
   const validKids = kids.filter((kid) => kid.name.trim() !== "" && kid.age.trim() !== "")
+
+  if (isLoading) {
+    return (
+      <div className="flex flex-col items-center justify-center py-12">
+        <div className="w-full max-w-md p-8 border rounded-lg shadow-sm bg-card">
+          <div className="space-y-4">
+            <div className="h-8 w-3/4 bg-muted animate-pulse rounded"></div>
+            <div className="h-4 w-1/2 bg-muted animate-pulse rounded"></div>
+            <div className="h-32 bg-muted animate-pulse rounded"></div>
+            <div className="h-24 bg-muted animate-pulse rounded"></div>
+            <div className="h-24 bg-muted animate-pulse rounded"></div>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <>
@@ -952,207 +985,16 @@ export default function RegistrationForm() {
       </Form>
 
       {/* Confirmation Dialog */}
-      <Dialog open={showConfirmation} onOpenChange={setShowConfirmation}>
-        <DialogContent className="max-w-3xl max-h-[90vh] overflow-hidden flex flex-col p-0 gap-0">
-          <DialogHeader className="p-4 sm:p-6 sticky top-0 bg-background z-10 border-b">
-            {/* Update the confirmation dialog title: */}
-            <DialogTitle>Madhupur Shahid Smrity Alumni Registration</DialogTitle>
-            <DialogDescription>Review your registration information before submission.</DialogDescription>
-          </DialogHeader>
-
-          <ScrollArea className="flex-1 px-4 sm:px-6 py-2 overflow-auto">
-            <div className="space-y-4 pb-4">
-              {/* Personal Information */}
-              <div className="space-y-3">
-                <h3 className="text-lg font-semibold flex items-center">
-                  <span className="bg-primary text-primary-foreground w-6 h-6 rounded-full inline-flex items-center justify-center text-xs mr-2">
-                    1
-                  </span>
-                  Personal Information
-                </h3>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 bg-muted/30 p-3 rounded-md">
-                  <div className="flex flex-col py-1">
-                    <span className="text-xs font-medium">Full Name</span>
-                    <span className="text-sm">{formValues.nameEnglish || "—"}</span>
-                  </div>
-                  <div className="flex flex-col py-1">
-                    <span className="text-xs font-medium">Gender</span>
-                    <span className="text-sm capitalize">{formValues.gender || "—"}</span>
-                  </div>
-                  <div className="flex flex-col py-1">
-                    <span className="text-xs font-medium">Mobile Number</span>
-                    <span className="text-sm">{formValues.mobileNumber || "—"}</span>
-                  </div>
-                  <div className="flex flex-col py-1">
-                    <span className="text-xs font-medium">Email</span>
-                    <span className="text-sm">{formValues.email || "—"}</span>
-                  </div>
-                  <div className="flex flex-col py-1">
-                    <span className="text-xs font-medium">Blood Group</span>
-                    <span className="text-sm">{formValues.bloodGroup || "—"}</span>
-                  </div>
-                  <div className="flex flex-col py-1">
-                    <span className="text-xs font-medium">T-Shirt Size</span>
-                    <span className="text-sm">{formValues.tShirtSize || "—"}</span>
-                  </div>
-                  <div className="flex flex-col py-1 sm:col-span-2">
-                    <span className="text-xs font-medium">Present Address</span>
-                    <span className="text-sm">{formValues.presentAddress || "—"}</span>
-                  </div>
-                  <div className="flex flex-col py-1 sm:col-span-2">
-                    <span className="text-xs font-medium">Permanent Address</span>
-                    <span className="text-sm">{formValues.permanentAddress || "—"}</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Education Information */}
-              <div className="space-y-3">
-                <h3 className="text-lg font-semibold flex items-center">
-                  <span className="bg-primary text-primary-foreground w-6 h-6 rounded-full inline-flex items-center justify-center text-xs mr-2">
-                    2
-                  </span>
-                  Education Information
-                </h3>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 bg-muted/30 p-3 rounded-md">
-                  <div className="flex flex-col py-1">
-                    <span className="text-xs font-medium">SSC Batch</span>
-                    <span className="text-sm">{formValues.sscBatch || "—"}</span>
-                  </div>
-                  <div className="flex flex-col py-1">
-                    <span className="text-xs font-medium">SSC Department</span>
-                    <span className="text-sm">{formValues.sscDepartment || "—"}</span>
-                  </div>
-                  <div className="flex flex-col py-1">
-                    <span className="text-xs font-medium">HSC Batch</span>
-                    <span className="text-sm">{formValues.hscBatch || "—"}</span>
-                  </div>
-                  <div className="flex flex-col py-1">
-                    <span className="text-xs font-medium">HSC Department</span>
-                    <span className="text-sm">{formValues.hscDepartment || "—"}</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Occupation Information */}
-              <div className="space-y-3">
-                <h3 className="text-lg font-semibold flex items-center">
-                  <span className="bg-primary text-primary-foreground w-6 h-6 rounded-full inline-flex items-center justify-center text-xs mr-2">
-                    3
-                  </span>
-                  Occupation Information
-                </h3>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 bg-muted/30 p-3 rounded-md">
-                  <div className="flex flex-col py-1">
-                    <span className="text-xs font-medium">Occupation</span>
-                    <span className="text-sm">{formValues.occupation || "—"}</span>
-                  </div>
-                  <div className="flex flex-col py-1">
-                    <span className="text-xs font-medium">Organization</span>
-                    <span className="text-sm">{formValues.organization || "—"}</span>
-                  </div>
-                  <div className="flex flex-col py-1">
-                    <span className="text-xs font-medium">Job Position</span>
-                    <span className="text-sm">{formValues.jobPosition || "—"}</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Guest Information */}
-              <div className="space-y-3">
-                <h3 className="text-lg font-semibold flex items-center">
-                  <span className="bg-primary text-primary-foreground w-6 h-6 rounded-full inline-flex items-center justify-center text-xs mr-2">
-                    4
-                  </span>
-                  Guest Information
-                </h3>
-
-                {validGuests.length > 0 ? (
-                  <div className="space-y-2">
-                    <h4 className="text-sm font-medium">Additional Guests (5 years+)</h4>
-                    <div className="space-y-2">
-                      {validGuests.map((guest) => (
-                        <div key={guest.id} className="bg-muted/30 p-3 rounded-md">
-                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                            <div>
-                              <span className="text-xs font-medium block">Name</span>
-                              <span className="text-sm">{guest.name}</span>
-                            </div>
-                            <div>
-                              <span className="text-xs font-medium block">Age</span>
-                              <span className="text-sm">{guest.age}</span>
-                            </div>
-                            <div>
-                              <span className="text-xs font-medium block">Relation</span>
-                              <span className="text-sm">{guest.relation}</span>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ) : (
-                  <p className="text-sm text-muted-foreground bg-muted/30 p-3 rounded-md">
-                    No additional guests added.
-                  </p>
-                )}
-
-                {validKids.length > 0 && (
-                  <div className="space-y-2 mt-3">
-                    <h4 className="text-sm font-medium">Kids (less than 5 years)</h4>
-                    <div className="space-y-2">
-                      {validKids.map((kid) => (
-                        <div key={kid.id} className="bg-muted/30 p-3 rounded-md">
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                            <div>
-                              <span className="text-xs font-medium block">Name</span>
-                              <span className="text-sm">{kid.name}</span>
-                            </div>
-                            <div>
-                              <span className="text-xs font-medium block">Age</span>
-                              <span className="text-sm">{kid.age}</span>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {formValues.remarks && (
-                  <div>
-                    <h4 className="text-sm font-medium mb-1">Remarks</h4>
-                    <p className="text-sm bg-muted/30 p-3 rounded-md">{formValues.remarks}</p>
-                  </div>
-                )}
-              </div>
-            </div>
-          </ScrollArea>
-
-          <DialogFooter className="p-4 sm:p-6 border-t sticky bottom-0 bg-background z-10 mt-0">
-            <div className="flex flex-col sm:flex-row gap-2 w-full">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setShowConfirmation(false)}
-                className="sm:order-1 order-2 w-full sm:w-auto"
-              >
-                <ChevronLeft className="h-4 w-4 mr-2" />
-                Edit Information
-              </Button>
-              {/* Update the confirmation button: */}
-              <Button
-                type="button"
-                onClick={() => form.handleSubmit(onSubmit)()}
-                className="sm:order-2 order-1 w-full sm:w-auto"
-              >
-                <Check className="h-4 w-4 mr-2" />
-                Confirm & Complete Registration
-              </Button>
-            </div>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {showConfirmation && (
+        <LazyConfirmationDialog
+          open={showConfirmation}
+          onOpenChange={setShowConfirmation}
+          formValues={formValues}
+          validGuests={validGuests}
+          validKids={validKids}
+          onSubmit={() => form.handleSubmit(onSubmit)()}
+        />
+      )}
     </>
   )
 }
