@@ -788,8 +788,7 @@ export default function RegistrationForm() {
                     )}
                   />
                 </div>
-
-                <div className="space-y-4">
+                <div className="space-y-4 ">
                   <h3 className="text-sm font-medium text-muted-foreground">HSC Information</h3>
                   <FormField
                     control={form.control}
