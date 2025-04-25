@@ -15,7 +15,7 @@ import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
-import { useToast } from "@/hooks/use-toast"
+import { useToaster } from "@/components/ui/toast"
 import {
   Dialog,
   DialogContent,
@@ -148,6 +148,10 @@ const GUESTS_KEY = "registration_form_guests"
 const KIDS_KEY = "registration_form_kids"
 const PROFILE_IMAGE_KEY = "registration_form_profile_image"
 
+// Allowed image types
+const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/gif"]
+const MAX_IMAGE_SIZE = 5 * 1024 * 1024 // 5MB
+
 export default function RegistrationForm() {
   const [guests, setGuests] = useState<GuestType[]>([])
   const [kids, setKids] = useState<KidType[]>([])
@@ -155,7 +159,8 @@ export default function RegistrationForm() {
   const [showConfirmation, setShowConfirmation] = useState(false)
   const [submissionDate, setSubmissionDate] = useState<string>("")
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const { toast } = useToast()
+  const { addToast } = useToaster()
+  const [isFormInitialized, setIsFormInitialized] = useState(false)
 
   // Load saved form data on initial render
   useEffect(() => {
@@ -207,26 +212,32 @@ export default function RegistrationForm() {
     if (savedProfileImage) {
       setProfileImage(savedProfileImage)
     }
+
+    setIsFormInitialized(true)
   }, [])
 
   // Save guests to localStorage whenever they change
   useEffect(() => {
-    localStorage.setItem(GUESTS_KEY, JSON.stringify(guests))
-  }, [guests])
+    if (isFormInitialized) {
+      localStorage.setItem(GUESTS_KEY, JSON.stringify(guests))
+    }
+  }, [guests, isFormInitialized])
 
   // Save kids to localStorage whenever they change
   useEffect(() => {
-    localStorage.setItem(KIDS_KEY, JSON.stringify(kids))
-  }, [kids])
+    if (isFormInitialized) {
+      localStorage.setItem(KIDS_KEY, JSON.stringify(kids))
+    }
+  }, [kids, isFormInitialized])
 
   // Save profile image to localStorage whenever it changes
   useEffect(() => {
-    if (profileImage) {
+    if (isFormInitialized && profileImage !== null) {
       localStorage.setItem(PROFILE_IMAGE_KEY, profileImage)
-    } else {
+    } else if (isFormInitialized && profileImage === null) {
       localStorage.removeItem(PROFILE_IMAGE_KEY)
     }
-  }, [profileImage])
+  }, [profileImage, isFormInitialized])
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
@@ -252,11 +263,13 @@ export default function RegistrationForm() {
 
   // Save form data to localStorage whenever it changes
   useEffect(() => {
-    const subscription = form.watch((value) => {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(value))
-    })
-    return () => subscription.unsubscribe()
-  }, [form.watch])
+    if (isFormInitialized) {
+      const subscription = form.watch((value) => {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(value))
+      })
+      return () => subscription.unsubscribe()
+    }
+  }, [form, form.watch, isFormInitialized])
 
   const handleSubmit = useCallback(
     (e: React.FormEvent) => {
@@ -287,7 +300,7 @@ export default function RegistrationForm() {
       }
       console.log(formData)
 
-      toast({
+      addToast({
         title: "Form submitted",
         description: "Your registration has been submitted successfully.",
       })
@@ -297,38 +310,74 @@ export default function RegistrationForm() {
 
       // Here you would typically send the data to your backend
     },
-    [guests, kids, profileImage, submissionDate, toast],
+    [guests, kids, profileImage, submissionDate, addToast],
   )
+
+  const validateImage = (file: File): { valid: boolean; message?: string } => {
+    // Check file type
+    if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
+      return {
+        valid: false,
+        message: "Invalid file type. Please select a JPEG, PNG, or GIF image.",
+      }
+    }
+
+    // Check file size
+    if (file.size > MAX_IMAGE_SIZE) {
+      return {
+        valid: false,
+        message: "File too large. Image size should be less than 5MB.",
+      }
+    }
+
+    return { valid: true }
+  }
 
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
-    if (file) {
-      // Check file type
-      if (!file.type.startsWith("image/")) {
-        toast({
-          title: "Invalid file type",
-          description: "Please select an image file.",
-          variant: "destructive",
-        })
-        return
-      }
 
-      // Check file size (limit to 5MB)
-      if (file.size > 5 * 1024 * 1024) {
-        toast({
-          title: "File too large",
-          description: "Image size should be less than 5MB.",
-          variant: "destructive",
-        })
-        return
-      }
+    if (!file) return
 
-      const reader = new FileReader()
-      reader.onload = () => {
-        setProfileImage(reader.result as string)
+    const validation = validateImage(file)
+
+    if (!validation.valid) {
+      addToast({
+        title: "Error",
+        description: validation.message,
+        variant: "destructive",
+      })
+
+      // Reset the file input
+      if (fileInputRef.current) {
+        fileInputRef.current.value = ""
       }
-      reader.readAsDataURL(file)
+      return
     }
+
+    const reader = new FileReader()
+
+    reader.onload = () => {
+      setProfileImage(reader.result as string)
+      addToast({
+        title: "Success",
+        description: "Profile image uploaded successfully.",
+      })
+    }
+
+    reader.onerror = () => {
+      addToast({
+        title: "Error",
+        description: "Failed to read the image file. Please try again.",
+        variant: "destructive",
+      })
+
+      // Reset the file input
+      if (fileInputRef.current) {
+        fileInputRef.current.value = ""
+      }
+    }
+
+    reader.readAsDataURL(file)
   }
 
   const removeImage = () => {
@@ -336,6 +385,10 @@ export default function RegistrationForm() {
     if (fileInputRef.current) {
       fileInputRef.current.value = ""
     }
+    addToast({
+      title: "Success",
+      description: "Profile image removed successfully.",
+    })
   }
 
   const triggerFileInput = () => {
@@ -394,8 +447,8 @@ export default function RegistrationForm() {
       localStorage.removeItem(KIDS_KEY)
       localStorage.removeItem(PROFILE_IMAGE_KEY)
 
-      toast({
-        title: "Form cleared",
+      addToast({
+        title: "Success",
         description: "All form data has been cleared.",
       })
     }
@@ -408,14 +461,27 @@ export default function RegistrationForm() {
     <>
       <Form {...form}>
         <form onSubmit={handleSubmit} className="space-y-6 mb-10">
-          <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-4">
-            <h2 className="text-2xl font-bold">Registration Form</h2>
+          {/* Form title and description */}
+          <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
+            <div>
+              <h2 className="text-2xl font-bold">Alumni Registration Form</h2>
+              <p className="text-sm text-muted-foreground mt-1">Golden Jubilee 2023 | Established 2015</p>
+            </div>
             <div className="flex flex-wrap gap-2">
               <Button type="button" variant="outline" size="sm" onClick={clearForm}>
                 <Trash2 className="h-4 w-4 mr-2" />
                 Clear Form
               </Button>
             </div>
+          </div>
+
+          {/* Welcome message */}
+          <div className="bg-primary/10 border border-primary/20 rounded-lg p-4 mb-6">
+            <p className="text-sm">
+              Welcome to the Madhupur Shahid Smrity Alumni Registration portal. This form collects information to
+              maintain our alumni database and help organize reunions and events. Your information will be kept
+              confidential and used only for alumni association purposes.
+            </p>
           </div>
 
           <Card className="overflow-hidden">
@@ -464,7 +530,7 @@ export default function RegistrationForm() {
                   </div>
                   <input
                     type="file"
-                    accept="image/*"
+                    accept="image/jpeg,image/png,image/gif"
                     className="hidden"
                     ref={fileInputRef}
                     onChange={handleImageChange}
@@ -500,7 +566,7 @@ export default function RegistrationForm() {
                         <FormControl>
                           <RadioGroup
                             onValueChange={field.onChange}
-                            defaultValue={field.value}
+                            value={field.value}
                             className="flex flex-row space-x-4"
                           >
                             <FormItem className="flex items-center space-x-2 space-y-0">
@@ -529,6 +595,8 @@ export default function RegistrationForm() {
                   />
                 </div>
               </div>
+
+              <Separator className="my-6" />
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="space-y-4">
@@ -571,7 +639,7 @@ export default function RegistrationForm() {
                       render={({ field }) => (
                         <FormItem>
                           <FormLabel>Blood Group</FormLabel>
-                          <Select onValueChange={field.onChange} defaultValue={field.value}>
+                          <Select onValueChange={field.onChange} value={field.value}>
                             <FormControl>
                               <SelectTrigger>
                                 <SelectValue placeholder="Select" />
@@ -599,7 +667,7 @@ export default function RegistrationForm() {
                       render={({ field }) => (
                         <FormItem>
                           <FormLabel>T-Shirt Size</FormLabel>
-                          <Select onValueChange={field.onChange} defaultValue={field.value}>
+                          <Select onValueChange={field.onChange} value={field.value}>
                             <FormControl>
                               <SelectTrigger>
                                 <SelectValue placeholder="Select" />
@@ -678,7 +746,7 @@ export default function RegistrationForm() {
                     render={({ field }) => (
                       <FormItem>
                         <FormLabel>SSC Batch (Year)</FormLabel>
-                        <Select onValueChange={field.onChange} defaultValue={field.value}>
+                        <Select onValueChange={field.onChange} value={field.value}>
                           <FormControl>
                             <SelectTrigger>
                               <SelectValue placeholder="Select year" />
@@ -703,7 +771,7 @@ export default function RegistrationForm() {
                     render={({ field }) => (
                       <FormItem>
                         <FormLabel>SSC Department</FormLabel>
-                        <Select onValueChange={field.onChange} defaultValue={field.value}>
+                        <Select onValueChange={field.onChange} value={field.value}>
                           <FormControl>
                             <SelectTrigger>
                               <SelectValue placeholder="Select department" />
@@ -729,7 +797,7 @@ export default function RegistrationForm() {
                     render={({ field }) => (
                       <FormItem>
                         <FormLabel>HSC Batch (Year)</FormLabel>
-                        <Select onValueChange={field.onChange} defaultValue={field.value}>
+                        <Select onValueChange={field.onChange} value={field.value}>
                           <FormControl>
                             <SelectTrigger>
                               <SelectValue placeholder="Select year" />
@@ -754,7 +822,7 @@ export default function RegistrationForm() {
                     render={({ field }) => (
                       <FormItem>
                         <FormLabel>HSC Department</FormLabel>
-                        <Select onValueChange={field.onChange} defaultValue={field.value}>
+                        <Select onValueChange={field.onChange} value={field.value}>
                           <FormControl>
                             <SelectTrigger>
                               <SelectValue placeholder="Select department" />
@@ -912,13 +980,10 @@ export default function RegistrationForm() {
           </Card>
 
           <div className="flex justify-end gap-4 mt-8">
-            <Button type="button" variant="outline" onClick={clearForm}>
-              Clear Form
-            </Button>
             <Button type="button" variant="secondary" onClick={() => setShowConfirmation(true)}>
               Preview
             </Button>
-            <Button type="submit">Submit</Button>
+            <Button type="submit">Register as Alumni</Button>
           </div>
         </form>
       </Form>
@@ -926,8 +991,8 @@ export default function RegistrationForm() {
       {/* Confirmation Dialog */}
       <Dialog open={showConfirmation} onOpenChange={setShowConfirmation}>
         <DialogContent className="max-w-3xl max-h-[90vh] overflow-hidden flex flex-col p-0 gap-0">
-          <DialogHeader className="p-4 sm:p-6 sticky top-0 bg-background z-10 border-b">
-            <DialogTitle>Registration Details</DialogTitle>
+          <DialogHeader className="p-4 sm:p-6 sticky top-0 bg-gradient-to-r from-primary/20 to-primary/10 z-10 border-b">
+            <DialogTitle>Madhupur Shahid Smrity Alumni Registration</DialogTitle>
             <DialogDescription>Review your registration information before submission.</DialogDescription>
           </DialogHeader>
 
@@ -942,39 +1007,40 @@ export default function RegistrationForm() {
                   Personal Information
                 </h3>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 bg-muted/30 p-3 rounded-md">
-                  <div className="flex flex-col py-1">
+                  <div className="flex flex-col py-1 border-b sm:border-b-0">
                     <span className="text-xs font-medium">Full Name</span>
                     <span className="text-sm">{formValues.nameEnglish || "—"}</span>
                   </div>
-                  <div className="flex flex-col py-1">
+                  <div className="flex flex-col py-1 border-b sm:border-b-0">
                     <span className="text-xs font-medium">Gender</span>
                     <span className="text-sm capitalize">{formValues.gender || "—"}</span>
                   </div>
-                  <div className="flex flex-col py-1">
+                  <div className="flex flex-col py-1 border-b sm:border-b-0">
                     <span className="text-xs font-medium">Mobile Number</span>
                     <span className="text-sm">{formValues.mobileNumber || "—"}</span>
                   </div>
-                  <div className="flex flex-col py-1">
+                  <div className="flex flex-col py-1 border-b sm:border-b-0">
                     <span className="text-xs font-medium">Email</span>
                     <span className="text-sm">{formValues.email || "—"}</span>
                   </div>
-                  <div className="flex flex-col py-1">
+                  <div className="flex flex-col py-1 border-b sm:border-b-0">
                     <span className="text-xs font-medium">Blood Group</span>
                     <span className="text-sm">{formValues.bloodGroup || "—"}</span>
                   </div>
-                  <div className="flex flex-col py-1">
+                  <div className="flex flex-col py-1 border-b sm:border-b-0">
                     <span className="text-xs font-medium">T-Shirt Size</span>
                     <span className="text-sm">{formValues.tShirtSize || "—"}</span>
                   </div>
-                  <div className="flex flex-col py-1 sm:col-span-2">
+                  <div className="flex flex-col py-1 sm:col-span-2 border-t">
                     <span className="text-xs font-medium">Present Address</span>
                     <span className="text-sm">{formValues.presentAddress || "—"}</span>
                   </div>
-                  <div className="flex flex-col py-1 sm:col-span-2">
+                  <div className="flex flex-col py-1 sm:col-span-2 border-t">
                     <span className="text-xs font-medium">Permanent Address</span>
                     <span className="text-sm">{formValues.permanentAddress || "—"}</span>
                   </div>
                 </div>
+                <Separator className="my-4" />
               </div>
 
               {/* Education Information */}
@@ -986,23 +1052,24 @@ export default function RegistrationForm() {
                   Education Information
                 </h3>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 bg-muted/30 p-3 rounded-md">
-                  <div className="flex flex-col py-1">
+                  <div className="flex flex-col py-1 border-b sm:border-b-0">
                     <span className="text-xs font-medium">SSC Batch</span>
                     <span className="text-sm">{formValues.sscBatch || "—"}</span>
                   </div>
-                  <div className="flex flex-col py-1">
+                  <div className="flex flex-col py-1 border-b sm:border-b-0">
                     <span className="text-xs font-medium">SSC Department</span>
                     <span className="text-sm">{formValues.sscDepartment || "—"}</span>
                   </div>
-                  <div className="flex flex-col py-1">
+                  <div className="flex flex-col py-1 border-b sm:border-b-0">
                     <span className="text-xs font-medium">HSC Batch</span>
                     <span className="text-sm">{formValues.hscBatch || "—"}</span>
                   </div>
-                  <div className="flex flex-col py-1">
+                  <div className="flex flex-col py-1 border-b sm:border-b-0">
                     <span className="text-xs font-medium">HSC Department</span>
                     <span className="text-sm">{formValues.hscDepartment || "—"}</span>
                   </div>
                 </div>
+                <Separator className="my-4" />
               </div>
 
               {/* Occupation Information */}
@@ -1014,19 +1081,20 @@ export default function RegistrationForm() {
                   Occupation Information
                 </h3>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 bg-muted/30 p-3 rounded-md">
-                  <div className="flex flex-col py-1">
+                  <div className="flex flex-col py-1 border-b sm:border-b-0">
                     <span className="text-xs font-medium">Occupation</span>
                     <span className="text-sm">{formValues.occupation || "—"}</span>
                   </div>
-                  <div className="flex flex-col py-1">
+                  <div className="flex flex-col py-1 border-b sm:border-b-0">
                     <span className="text-xs font-medium">Organization</span>
                     <span className="text-sm">{formValues.organization || "—"}</span>
                   </div>
-                  <div className="flex flex-col py-1">
+                  <div className="flex flex-col py-1 sm:col-span-2 border-t">
                     <span className="text-xs font-medium">Job Position</span>
                     <span className="text-sm">{formValues.jobPosition || "—"}</span>
                   </div>
                 </div>
+                <Separator className="my-4" />
               </div>
 
               {/* Guest Information */}
@@ -1052,11 +1120,11 @@ export default function RegistrationForm() {
                         .map((guest, index) => (
                           <div key={guest.id} className="bg-muted/30 p-3 rounded-md">
                             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                              <div>
+                              <div className="border-b sm:border-b-0 pb-1 sm:pb-0">
                                 <span className="text-xs font-medium block">Name</span>
                                 <span className="text-sm">{guest.name || "—"}</span>
                               </div>
-                              <div>
+                              <div className="border-b sm:border-b-0 pb-1 sm:pb-0">
                                 <span className="text-xs font-medium block">Age</span>
                                 <span className="text-sm">{guest.age || "—"}</span>
                               </div>
@@ -1084,7 +1152,7 @@ export default function RegistrationForm() {
                         .map((kid, index) => (
                           <div key={kid.id} className="bg-muted/30 p-3 rounded-md">
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                              <div>
+                              <div className="border-b sm:border-b-0 pb-1 sm:pb-0">
                                 <span className="text-xs font-medium block">Name</span>
                                 <span className="text-sm">{kid.name || "—"}</span>
                               </div>
@@ -1126,7 +1194,7 @@ export default function RegistrationForm() {
                 className="sm:order-2 order-1 w-full sm:w-auto"
               >
                 <Check className="h-4 w-4 mr-2" />
-                Confirm & Submit
+                Confirm & Complete Registration
               </Button>
             </div>
           </DialogFooter>
